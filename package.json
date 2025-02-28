@@ -1,0 +1,18 @@
+{
+  "name": "ikamura",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "phaser": "^3.88.2",
+    "vite": "^6.2.0"
+  }
+}

@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>コライダーエディター</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+            color: #333;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .canvas-container {
+            position: relative;
+            border: 2px solid #333;
+            background-color: #000;
+            overflow: auto;
+            max-height: 80vh;
+        }
+        .controls {
+            flex: 1;
+            min-width: 300px;
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .control-group {
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
+        }
+        h1, h2, h3 {
+            margin-top: 0;
+            color: #2196F3;
+        }
+        button {
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            margin: 5px 5px 5px 0;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #0b7dda;
+        }
+        .collider-list {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #f9f9f9;
+        }
+        .collider-item {
+            padding: 5px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+        }
+        .collider-item:hover {
+            background-color: #f0f0f0;
+        }
+        .collider-item.selected {
+            background-color: #e3f2fd;
+            font-weight: bold;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .output-code {
+            width: 100%;
+            min-height: 200px;
+            font-family: monospace;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f5f5f5;
+            white-space: pre;
+            overflow: auto;
+        }
+        .player-marker {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background-color: #2196F3;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            display: none;
+            z-index: 100;
+        }
+        .load-code-container {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+        }
+        .load-code-input {
+            width: 100%;
+            min-height: 100px;
+            font-family: monospace;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f5f5f5;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>コライダーエディター</h1>
+    
+    <div class="container">
+        <div class="canvas-container">
+            <canvas id="gameCanvas"></canvas>
+            <div id="playerMarker" class="player-marker"></div>
+        </div>
+        
+        <div class="controls">
+            <div class="control-group">
+                <h2>コントロール</h2>
+                <button id="addRectBtn">固体コライダーを追加</button>
+                <button id="addPlatformBtn">プラットフォームを追加</button>
+                <button id="addPitBtn">落とし穴を追加</button>
+                <button id="addLadderBtn">ハシゴを追加</button>
+            </div>
+            
+            <div class="control-group">
+                <h2>プレイヤー開始位置</h2>
+                <button id="setPlayerPosBtn">プレイヤー開始位置を設定</button>
+                <div>
+                    <label for="playerX">X座標:</label>
+                    <input type="number" id="playerX" value="83">
+                    
+                    <label for="playerY">Y座標:</label>
+                    <input type="number" id="playerY" value="120.125">
+                    
+                    <button id="updatePlayerPosBtn">位置を更新</button>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h2>選択したコライダー</h2>
+                <div id="noSelectionMessage">コライダーが選択されていません</div>
+                <div id="selectedColliderControls" style="display: none;">
+                    <label for="colliderType">タイプ:</label>
+                    <select id="colliderType">
+                        <option value="solid">固体</option>
+                        <option value="platform">プラットフォーム</option>
+                        <option value="pit">落とし穴</option>
+                        <option value="ladder">ハシゴ</option>
+                    </select>
+                    
+                    <label for="colliderX">X座標:</label>
+                    <input type="number" id="colliderX">
+                    
+                    <label for="colliderY">Y座標:</label>
+                    <input type="number" id="colliderY">
+                    
+                    <label for="colliderWidth">幅:</label>
+                    <input type="number" id="colliderWidth">
+                    
+                    <label for="colliderHeight">高さ:</label>
+                    <input type="number" id="colliderHeight">
+                    
+                    <button id="updateColliderBtn">更新</button>
+                    <button id="deleteColliderBtn">削除</button>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h2>コライダーリスト</h2>
+                <div id="colliderList" class="collider-list"></div>
+            </div>
+            
+            <div class="control-group">
+                <h2>出力コード</h2>
+                <button id="copyCodeBtn">コードをコピー</button>
+                <textarea id="outputCode" class="output-code" readonly></textarea>
+            </div>
+            
+            <div class="control-group load-code-container">
+                <h2>コードから読み込み</h2>
+                <textarea id="loadCodeInput" class="load-code-input" placeholder="ここにコードを貼り付けてください"></textarea>
+                <button id="loadCodeBtn">コードから読み込む</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="collider-editor.js"></script>
+</body>
+</html> 

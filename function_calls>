@@ -1,0 +1,113 @@
+<invoke name="run_terminal_cmd">
+<parameter name="command">npm install vite phaser --save-dev</parameter>
+<parameter name="explanation">viteとphaserをインストールするガヨ！</parameter>
+<parameter name="is_background">false</parameter>
+<parameter name="require_user_approval">true</parameter>
+</invoke>
+
+<invoke name="edit_file">
+<parameter name="target_file">package.json</parameter>
+<parameter name="instructions">package.jsonにviteの開発サーバー起動スクリプトを追加するガヨ！</parameter>
+<parameter name="code_edit">{
+  "name": "ikamura",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "phaser": "^3.70.0",
+    "vite": "^5.0.12"
+  }
+}</parameter>
+</invoke>
+
+<invoke name="run_terminal_cmd">
+<parameter name="command">uv pip install vite phaser</parameter>
+<parameter name="explanation">viteとphaserをインストールするガヨ！</parameter>
+<parameter name="is_background">false</parameter>
+<parameter name="require_user_approval">true</parameter>
+</invoke>
+
+<invoke name="run_terminal_cmd">
+<parameter name="command">npm run dev</parameter>
+<parameter name="explanation">開発サーバーを起動するガヨ！</parameter>
+<parameter name="is_background">true</parameter>
+<parameter name="require_user_approval">true</parameter>
+</invoke>
+
+<invoke name="edit_file">
+<parameter name="target_file">vite.config.js</parameter>
+<parameter name="instructions">Viteの設定ファイルを作成するガヨ！</parameter>
+<parameter name="code_edit">export default {
+  base: './',
+  server: {
+    host: true
+  }
+}</parameter>
+</invoke>
+
+<invoke name="run_terminal_cmd">
+<parameter name="command">mkdir -p src/assets && mv gamesceen.js main.js src/ && mv assets/* src/assets/ 2>/dev/null || true</parameter>
+<parameter name="explanation">srcディレクトリを作成してファイルを移動するガヨ！</parameter>
+<parameter name="is_background">false</parameter>
+<parameter name="require_user_approval">true</parameter>
+</invoke>
+
+<invoke name="edit_file">
+<parameter name="target_file">index.html</parameter>
+<parameter name="instructions">index.htmlを作成するガヨ！</parameter>
+<parameter name="code_edit"><!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>いか村</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #000;
+        }
+        canvas {
+            border: 2px solid #333;
+        }
+    </style>
+</head>
+<body>
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html></parameter>
+</invoke>
+
+<invoke name="edit_file">
+<parameter name="target_file">src/main.js</parameter>
+<parameter name="instructions">main.jsのインポートパスを修正するガヨ！</parameter>
+<parameter name="code_edit">import Phaser from 'phaser';
+import GameScene from './gamesceen';
+
+const config = {
+    type: Phaser.AUTO,
+    width: 800,
+    height: 600,
+    physics: {
+        default: 'arcade',
+        arcade: {
+            gravity: { y: 300 },
+            debug: true
+        }
+    },
+    scene: GameScene
+};
+
+const game = new Phaser.Game(config);</parameter>
+</invoke> 
