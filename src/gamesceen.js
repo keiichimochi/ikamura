@@ -11,6 +11,20 @@ class GameScene extends Phaser.Scene {
         this.isCrouching = false;
         this.isOnLadder = false;  // ハシゴ上フラグを追加
         this.playerDirection = 'right';
+        this.playerState = 'idle'; // プレイヤーの状態を追加（idle, running, jumping, crouching, climbing）
+        
+        // 地面判定を安定させるための変数を追加
+        this.groundedTime = 0;     // 接地状態が続いている時間
+        this.airborneTime = 0;     // 空中状態が続いている時間
+        this.groundBufferTime = 100; // 接地判定の猶予時間（ミリ秒）- 値を小さくして安定化
+        this.jumpBufferTime = 200;   // ジャンプ入力の猶予時間（ミリ秒）
+        this.lastJumpTime = 0;     // 最後にジャンプした時間
+        this.stateChangeThreshold = 300; // 状態変化の閾値（ミリ秒）- 値を大きくして安定化
+        
+        // 状態変化の履歴を保持する配列（より長く保持）
+        this.stateHistory = [];
+        this.stateHistoryMaxLength = 5;
+        
         this.groundData = [];
         this.waterTiles = [];
         this.pitAreas = [[6, 7], [12, 13], [18, 20]];
@@ -26,8 +40,11 @@ class GameScene extends Phaser.Scene {
         // プレイヤー画像のロード
         this.load.image('player_idle_right', 'src/assets/player_idle_right.png');
         this.load.image('player_crouch', 'src/assets/player_crouch.png');
-        this.load.image('player_jump_right', 'src/assets/player_jump_right0.png');
-        this.load.image('player_climbing', 'src/assets/player_climing.png');
+        this.load.image('player_jump_right0', 'src/assets/player_jump_right0.png');
+        this.load.image('player_jump_right1', 'src/assets/player_jump_right1.png');
+        
+        // ハシゴ用の画像をロード
+        this.load.image('player_climbing', 'src/assets/player_climbing.png');
         
         // 走るアニメーション用の画像をロード
         for (let i = 0; i < 3; i++) {
@@ -50,8 +67,11 @@ class GameScene extends Phaser.Scene {
         // 物理世界の境界を設定
         this.physics.world.setBounds(0, 0, 1200, 240);
         
-        // 重力を設定
-        this.physics.world.gravity.y = 500;
+        // 重力を設定 - 少し弱めに調整
+        this.physics.world.gravity.y = 480;
+        
+        // 物理エンジンの設定を調整
+        this.physics.world.TILE_BIAS = 40; // タイルのバイアス値を増やして衝突検出を強化
         
         // ステージ背景を追加（表示サイズは変更しない）
         this.add.image(0, 0, 'stage')
@@ -59,6 +79,16 @@ class GameScene extends Phaser.Scene {
         
         // サウンドシステムの初期化
         this.initSoundSystem();
+        
+        // BGMを再生（サウンドシステムが利用可能な場合のみ）
+        if (this.hasSoundSystem && this.bgm) {
+            try {
+                this.bgm.play();
+                console.log('BGMの再生を開始しました');
+            } catch (error) {
+                console.error('BGMの再生に失敗しました:', error);
+            }
+        }
         
         // カメラの設定（ファミコンサイズに合わせる）
         this.cameras.main.setBounds(0, 0, 1200, 240);
@@ -76,11 +106,11 @@ class GameScene extends Phaser.Scene {
         // 地面の作成
         this.createGround();
         
+        // プレイヤーの作成（ここで一度だけ作成）
+        this.createPlayer();
+        
         // コライダーの作成
         this.createColliders();
-        
-        // プレイヤーの作成
-        this.createPlayer();
         
         // アニメーションの作成
         this.createAnimations();
@@ -88,8 +118,21 @@ class GameScene extends Phaser.Scene {
         // キーボード入力の設定
         this.cursors = this.input.keyboard.createCursorKeys();
         
-        // プレイヤーと地面の衝突を設定
-        this.physics.add.collider(this.player, this.platforms);
+        // プレイヤーと地面の衝突を設定 - プロセスコールバックを追加
+        this.physics.add.collider(
+            this.player, 
+            this.platforms, 
+            null, 
+            (player, platform) => {
+                // プレイヤーが下から上に移動している場合は衝突を無効化
+                if (player.body.velocity.y < 0 && player.y > platform.y + platform.height) {
+                    return false;
+                }
+                // それ以外の場合は衝突を有効化
+                return true;
+            }, 
+            this
+        );
         
         // プレイヤーとハシゴのオーバーラップを設定
         this.physics.add.overlap(this.player, this.ladders, this.handleLadderOverlap, null, this);
@@ -209,6 +252,10 @@ class GameScene extends Phaser.Scene {
             solid.setOrigin(0, 0);
             solid.setDisplaySize(collider.width, collider.height);
             solid.refreshBody();
+            // 衝突反応を強化（上からの衝突を強制的に有効に）
+            solid.body.checkCollision.up = true;
+            solid.body.checkCollision.down = false; // 下からは通過可能
+            solid.body.immovable = true;  // 固定
             solid.visible = false; // 見えないようにする（デバッグ時はコメントアウト）
         });
         
@@ -221,6 +268,7 @@ class GameScene extends Phaser.Scene {
             platform.body.checkCollision.down = false;
             platform.body.checkCollision.left = false;
             platform.body.checkCollision.right = false;
+            platform.body.immovable = true;  // 固定
             platform.visible = false; // 見えないようにする（デバッグ時はコメントアウト）
         });
         
@@ -259,6 +307,11 @@ class GameScene extends Phaser.Scene {
     // ハシゴとの接触処理
     handleLadderOverlap(player, ladder) {
         this.isOnLadder = true;
+        
+        // ハシゴ上では重力を無効化
+        player.body.setAllowGravity(false);
+        
+        // ハシゴ上での移動処理
         if (this.cursors.up.isDown) {
             player.setVelocityY(-100);
             player.anims.play('climb', true);
@@ -267,7 +320,9 @@ class GameScene extends Phaser.Scene {
             player.anims.play('climb', true);
         } else {
             player.setVelocityY(0);
+            // アニメーションを停止し、ハシゴ用の静止画像を表示
             player.anims.stop();
+            player.setTexture('player_climbing');
         }
     }
 
@@ -297,6 +352,9 @@ class GameScene extends Phaser.Scene {
             ground.setDisplaySize(data.width, data.height);
             ground.refreshBody();
             ground.setImmovable(true);
+            // 衝突反応を強化
+            ground.body.checkCollision.up = true;
+            ground.body.checkCollision.down = false;
         }
         
         // 水タイルの作成
@@ -308,18 +366,30 @@ class GameScene extends Phaser.Scene {
     }
 
     createPlayer() {
-        // プレイヤーの作成
+        // プレイヤーの作成（ここで一度だけ作成）
         this.player = this.physics.add.sprite(this.playerStartPosition.x, this.playerStartPosition.y, 'player_idle_right');
         this.player.setScale(0.25);
-        this.player.setBounce(0.1);
+        this.player.setBounce(0.0); // バウンス値を0に設定して地面との接触を安定させる
         this.player.setCollideWorldBounds(true);
         
-        // プレイヤーの当たり判定を調整
+        // プレイヤーの物理特性を調整
         this.player.body.setSize(this.player.width * 0.7, this.player.height * 0.9);
         this.player.body.setOffset(this.player.width * 0.15, this.player.height * 0.1);
-
+        
+        // プレイヤーの摩擦を増加させて滑りを減らす
+        this.player.body.setFriction(1, 1);
+        this.player.body.setDragX(0.5); // 水平方向の抵抗
+        
         // カメラをプレイヤーに追従
         this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+        
+        console.log('プレイヤーを作成しました:', {
+            x: this.player.x,
+            y: this.player.y,
+            scale: this.player.scale,
+            width: this.player.width,
+            height: this.player.height
+        });
     }
 
     createAnimations() {
@@ -347,7 +417,7 @@ class GameScene extends Phaser.Scene {
             repeat: -1
         });
 
-        // ハシゴを登るアニメーション
+        // ハシゴを登るアニメーション（player_climbing.pngを使用）
         this.anims.create({
             key: 'climb',
             frames: [
@@ -554,7 +624,7 @@ class GameScene extends Phaser.Scene {
         }
     }
 
-    update() {
+    update(time, delta) {
         // プレイヤーが画面外に落ちた場合はリスタート
         if (this.player.y > 240) {  // 画面の高さに合わせて修正
             // BGMを停止してからシーンをリスタート（サウンドシステムが利用可能な場合のみ）
@@ -570,76 +640,298 @@ class GameScene extends Phaser.Scene {
         }
 
         // ハシゴから離れた時のフラグリセット
-        if (!this.isOnLadder) {
+        const wasOnLadder = this.isOnLadder;
+        this.isOnLadder = false; // 毎フレームリセット（オーバーラップ検出で再設定される）
+        
+        // 物理的な接地判定
+        const physicsTouchingDown = this.player.body.touching.down || this.player.body.blocked.down;
+        
+        // 接地判定の安定化ロジック
+        if (physicsTouchingDown) {
+            this.groundedTime += delta;
+            this.airborneTime = 0;
+        } else {
+            this.airborneTime += delta;
+            this.groundedTime = 0;
+        }
+        
+        // 視覚表現のための安定した接地判定（短時間の非接地は無視する）
+        const visualGrounded = physicsTouchingDown || this.airborneTime < this.groundBufferTime;
+        
+        // 物理演算用の接地判定（実際の物理状態を優先）
+        const isGrounded = physicsTouchingDown;
+        
+        // 前の状態を保存
+        const prevState = this.playerState;
+        
+        // プレイヤーの状態を判定
+        let newState = prevState; // デフォルトは前の状態を維持
+        
+        // ジャンプの上昇/下降状態を判定
+        const isRising = this.player.body.velocity.y < 0;
+        const isFalling = this.player.body.velocity.y > 0;
+        
+        // ハシゴから離れた時の処理
+        if (wasOnLadder && !this.isOnLadder) {
+            // ハシゴから離れたら重力を有効化
             this.player.body.setAllowGravity(true);
-        }
-        this.isOnLadder = false;
-        
-        // プレイヤーの移動処理
-        if (this.cursors.left.isDown) {
-            // 左に移動
-            this.player.setVelocityX(-160);
-            this.playerDirection = 'left';
             
-            if (this.player.body.touching.down && !this.isOnLadder) {
-                if (this.isCrouching) {
-                    this.player.setTexture('player_crouch');
-                } else {
-                    this.player.anims.play('run_left', true);
+            // ハシゴから離れた時、地面に接地していなければジャンプ状態に
+            if (!isGrounded) {
+                newState = isRising ? 'jumping_up' : 'jumping_down';
+            } else {
+                newState = 'idle';
+            }
+        }
+        
+        // プレイヤーの移動処理（ハシゴ上でなければ通常の移動）
+        if (!this.isOnLadder) {
+            if (this.cursors.left.isDown) {
+                // 左に移動
+                this.player.setVelocityX(-160);
+                this.playerDirection = 'left';
+                
+                if (visualGrounded) {
+                    if (this.cursors.down.isDown) {
+                        newState = 'crouching';
+                    } else {
+                        newState = 'running';
+                    }
+                }
+            } else if (this.cursors.right.isDown) {
+                // 右に移動
+                this.player.setVelocityX(160);
+                this.playerDirection = 'right';
+                
+                if (visualGrounded) {
+                    if (this.cursors.down.isDown) {
+                        newState = 'crouching';
+                    } else {
+                        newState = 'running';
+                    }
+                }
+            } else {
+                // 停止
+                this.player.setVelocityX(0);
+                
+                if (visualGrounded) {
+                    if (this.cursors.down.isDown) {
+                        newState = 'crouching';
+                    } else {
+                        newState = 'idle';
+                    }
                 }
             }
-        } else if (this.cursors.right.isDown) {
-            // 右に移動
-            this.player.setVelocityX(160);
-            this.playerDirection = 'right';
             
-            if (this.player.body.touching.down && !this.isOnLadder) {
-                if (this.isCrouching) {
-                    this.player.setTexture('player_crouch');
-                } else {
-                    this.player.anims.play('run_right', true);
+            // しゃがみ処理
+            if (this.cursors.down.isDown && visualGrounded) {
+                this.isCrouching = true;
+                newState = 'crouching';
+            } else {
+                this.isCrouching = false;
+            }
+            
+            // ジャンプ処理の改善
+            const canJump = isGrounded && !this.isCrouching && 
+                            time - this.lastJumpTime > this.jumpBufferTime;
+            
+            if (this.cursors.up.isDown && canJump) {
+                // プレイヤーの高さは元の画像の高さ×スケール(0.25)
+                // 適切なジャンプ力を計算（重力と高さから算出）
+                const jumpHeight = this.player.height * 4 / 9; // ジャンプ高さを2倍に増加
+                const gravity = this.physics.world.gravity.y;
+                // 物理法則に基づいたジャンプ速度の計算: v = sqrt(2 * g * h)
+                const jumpVelocity = Math.sqrt(2 * gravity * jumpHeight) * -1;
+                
+                this.player.setVelocityY(jumpVelocity);
+                this.isJumping = true;
+                newState = 'jumping_up'; // 上昇中のジャンプ状態
+                this.lastJumpTime = time;
+                
+                // ジャンプ音を再生（サウンドシステムが利用可能かつサウンドがオンの場合のみ）
+                this.playJumpSound();
+            }
+            
+            // ジャンプ中の処理
+            if (!visualGrounded) {
+                // 上昇中か下降中かを判断して異なる状態を設定
+                if (isRising) {
+                    newState = 'jumping_up';   // 上昇中
+                } else if (isFalling) {
+                    newState = 'jumping_down'; // 下降中
                 }
+            } else if (this.isJumping && isGrounded && this.groundedTime > this.groundBufferTime * 2) {
+                // 十分な時間接地していたらジャンプフラグをリセット（猶予時間を2倍に）
+                this.isJumping = false;
             }
         } else {
-            // 停止
+            // ハシゴ上では左右移動を制限（X軸の速度をゼロに）
             this.player.setVelocityX(0);
+            newState = 'climbing';
+        }
+        
+        // プレイヤーがタイルに詰まるのを防ぐための処理
+        if (isGrounded && this.player.body.velocity.y > 0) {
+            // 落下中なのに接地判定がある場合は上方向に微調整
+            this.player.y -= 0.5;
+        }
+        
+        // 状態が変わった場合のみテクスチャを更新
+        if (newState !== prevState) {
+            // 状態履歴を更新
+            this.stateHistory.unshift(prevState);
+            if (this.stateHistory.length > this.stateHistoryMaxLength) {
+                this.stateHistory.pop();
+            }
             
-            if (this.player.body.touching.down && !this.isOnLadder) {
-                if (this.isCrouching) {
-                    this.player.setTexture('player_crouch');
-                } else {
-                    this.player.setTexture('player_idle_right');
-                    this.player.setFlipX(this.playerDirection === 'left');
+            // 状態変化が頻繁すぎる場合（短時間で同じ状態を行ったり来たりする場合）は無視
+            const isFrequentStateChange = 
+                this.lastStateChangeTime && 
+                (time - this.lastStateChangeTime < this.stateChangeThreshold);
+            
+            // 繰り返しパターンを検出（例: idle→jumping→idle→jumping）
+            const hasRepeatingPattern = this.detectRepeatingPattern(newState);
+            
+            if (!isFrequentStateChange && !hasRepeatingPattern) {
+                // 状態に応じたテクスチャやアニメーションを設定
+                this.updatePlayerAppearance(newState);
+                this.playerState = newState;
+                this.lastStateChangeTime = time;
+            } else {
+                // 繰り返しパターンが検出された場合、地面に接地していれば idle 状態を優先
+                if (hasRepeatingPattern && visualGrounded && newState === 'idle') {
+                    this.updatePlayerAppearance('idle');
+                    this.playerState = 'idle';
+                    this.lastStateChangeTime = time;
+                    this.isJumping = false; // ジャンプフラグをリセット
+                    
+                    // 状態履歴をリセット
+                    this.stateHistory = Array(this.stateHistoryMaxLength).fill('idle');
                 }
+            }
+        } else if (newState === 'jumping_up' || newState === 'jumping_down') {
+            // ジャンプ中は常に上昇/下降状態を確認して適切な画像を表示
+            const currentJumpState = isRising ? 'jumping_up' : 'jumping_down';
+            if (currentJumpState !== newState) {
+                this.updatePlayerAppearance(currentJumpState);
+                this.playerState = currentJumpState;
             }
         }
         
-        // しゃがみ処理（ハシゴ上では無効）
-        if (this.cursors.down.isDown && this.player.body.touching.down && !this.isOnLadder) {
-            this.isCrouching = true;
-            this.player.setTexture('player_crouch');
-        } else {
-            this.isCrouching = false;
-        }
-        
-        // ジャンプ処理（ハシゴ上では無効）
-        if (this.cursors.up.isDown && this.player.body.touching.down && !this.isCrouching && !this.isOnLadder) {
-            this.player.setVelocityY(-330);
-            this.isJumping = true;
-            
-            // ジャンプ音を再生（サウンドシステムが利用可能かつサウンドがオンの場合のみ）
-            this.playJumpSound();
-        }
-        
-        // ジャンプ中の処理（ハシゴ上では無効）
-        if (!this.player.body.touching.down && !this.isOnLadder) {
-            this.player.setTexture('player_jump_right');
-            this.player.setFlipX(this.playerDirection === 'left');
-        } else {
-            this.isJumping = false;
+        // デバッグ：状態をコンソールに出力（フレームレートを下げるため100msごと）
+        if (Math.floor(time / 100) !== Math.floor((time - delta) / 100)) {
+            // console.log(`位置: (${this.player.x.toFixed(1)}, ${this.player.y.toFixed(1)}), 速度: (${this.player.body.velocity.x.toFixed(1)}, ${this.player.body.velocity.y.toFixed(1)}), 接地: ${isGrounded}`);
         }
     }
     
+    // 繰り返しパターンを検出するメソッド
+    detectRepeatingPattern(newState) {
+        // 履歴が十分に蓄積されていない場合は早期リターン
+        if (this.stateHistory.length < 4) return false;
+        
+        // ジャンプ状態を統一して判定（上昇/下降の区別なく「jumping」として扱う）
+        const normalizeState = (state) => {
+            if (state === 'jumping_up' || state === 'jumping_down') return 'jumping';
+            return state;
+        };
+        
+        const normalizedNewState = normalizeState(newState);
+        const normalizedHistory = this.stateHistory.map(normalizeState);
+        
+        // idle と jumping の繰り返しパターンを検出
+        if (normalizedNewState === 'jumping' && normalizedHistory[0] === 'idle' && 
+            normalizedHistory[1] === 'jumping' && normalizedHistory[2] === 'idle') {
+            return true;
+        }
+        
+        if (normalizedNewState === 'idle' && normalizedHistory[0] === 'jumping' && 
+            normalizedHistory[1] === 'idle' && normalizedHistory[2] === 'jumping') {
+            return true;
+        }
+        
+        return false;
+    }
+
+    // プレイヤーの外見を状態に基づいて更新する新しいメソッド
+    updatePlayerAppearance(state) {
+        console.log(`プレイヤー状態を変更: ${this.playerState} → ${state}`);
+        
+        // すでに再生中のアニメーションがあれば、同じアニメーションの場合は何もしない
+        if (this.player.anims.isPlaying) {
+            if ((state === 'running' && 
+                 ((this.playerDirection === 'right' && this.player.anims.currentAnim.key === 'run_right') ||
+                  (this.playerDirection === 'left' && this.player.anims.currentAnim.key === 'run_left'))) ||
+                (state === 'climbing' && this.player.anims.currentAnim.key === 'climb')) {
+                // 同じアニメーションが再生中なら何もしない
+                return;
+            }
+        }
+        
+        // テクスチャが既に同じなら何もしない（ジャンプの上昇/下降は除く）
+        if (state === 'idle' && this.player.texture.key === 'player_idle_right' && 
+            this.player.flipX === (this.playerDirection === 'left')) {
+            return;
+        }
+        
+        if (state === 'jumping_up' && this.player.texture.key === 'player_jump_right1' && 
+            this.player.flipX === (this.playerDirection === 'left')) {
+            return;
+        }
+        
+        if (state === 'jumping_down' && this.player.texture.key === 'player_jump_right0' && 
+            this.player.flipX === (this.playerDirection === 'left')) {
+            return;
+        }
+        
+        if (state === 'crouching' && this.player.texture.key === 'player_crouch') {
+            return;
+        }
+        
+        if (state === 'climbing' && this.player.texture.key === 'player_climbing') {
+            return;
+        }
+        
+        // アニメーションを停止
+        this.player.anims.stop();
+        
+        switch (state) {
+            case 'idle':
+                this.player.setTexture('player_idle_right');
+                this.player.setFlipX(this.playerDirection === 'left');
+                break;
+                
+            case 'running':
+                if (this.playerDirection === 'right') {
+                    this.player.anims.play('run_right', true);
+                    this.player.setFlipX(false);
+                } else {
+                    this.player.anims.play('run_left', true);
+                    this.player.setFlipX(true);
+                }
+                break;
+                
+            case 'jumping_up':
+                // 上昇中は player_jump_right1.png を使用
+                this.player.setTexture('player_jump_right1');
+                this.player.setFlipX(this.playerDirection === 'left');
+                break;
+                
+            case 'jumping_down':
+                // 下降中は player_jump_right0.png を使用
+                this.player.setTexture('player_jump_right0');
+                this.player.setFlipX(this.playerDirection === 'left');
+                break;
+                
+            case 'crouching':
+                this.player.setTexture('player_crouch');
+                break;
+                
+            case 'climbing':
+                this.player.anims.play('climb', true);
+                break;
+        }
+    }
+
     // ジャンプ音を再生
     playJumpSound() {
         if (this.hasSoundSystem && this.jumpSound && this.isSoundOn) {
