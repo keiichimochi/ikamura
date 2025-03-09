@@ -13,6 +13,31 @@ class GameScene extends Phaser.Scene {
         this.playerDirection = 'right';
         this.playerState = 'idle'; // プレイヤーの状態を追加（idle, running, jumping, crouching, climbing）
         
+        // バーチャルボタン関連の変数
+        this.virtualButtons = {
+            left: null,
+            right: null,
+            up: null,
+            down: null,
+            attack: null,
+            jump: null
+        };
+        this.virtualLeftDown = false;
+        this.virtualRightDown = false;
+        this.virtualUpDown = false;
+        this.virtualDownDown = false;
+        this.virtualAttackDown = false;
+        this.virtualJumpDown = false;
+        this.isMobile = false;
+        this.isLandscape = false;
+        
+        // 武器関連の変数
+        this.weapons = null;  // 武器のグループ
+        this.lastAttackTime = 0;  // 最後に攻撃した時間
+        this.attackCooldown = 500;  // 攻撃のクールダウン時間（ミリ秒）
+        this.weaponSpeed = 400;  // 武器の速度
+        this.weaponSound = null;  // 武器の効果音
+        
         // 地面判定を安定させるための変数を追加
         this.groundedTime = 0;     // 接地状態が続いている時間
         this.airborneTime = 0;     // 空中状態が続いている時間
@@ -51,6 +76,18 @@ class GameScene extends Phaser.Scene {
             this.load.image(`player_run_right${i}`, `src/assets/player_run_right${i}.png`);
         }
         
+        // バーチャルボタン用の画像をロード - 削除（グラフィックスで代替）
+        // this.load.image('button_left', 'src/assets/button_left.png');
+        // this.load.image('button_right', 'src/assets/button_right.png');
+        // this.load.image('button_up', 'src/assets/button_up.png');
+        // this.load.image('button_down', 'src/assets/button_down.png');
+        // this.load.image('button_attack', 'src/assets/button_attack.png');  // 攻撃ボタン用の画像
+        
+        // 武器用の画像をロード
+        this.load.image('negi_right', 'src/assets/negi_right.png');
+        // 左向き武器用の画像も追加（右向きと同じものを使用し、後でフリップする）
+        this.load.image('negi_left', 'src/assets/negi_right.png');
+        
         // 地面とその他のゲーム要素
         this.load.image('ground', 'src/assets/ground.png');
         this.load.image('water', 'src/assets/water.png');
@@ -59,6 +96,7 @@ class GameScene extends Phaser.Scene {
         // サウンドファイルのロード
         this.load.audio('jump', ['src/assets/sound/jump.mp3', 'src/assets/sound/jump.wav']);
         this.load.audio('bgm', 'src/assets/sound/stage1.mp3');
+        this.load.audio('buki', 'src/assets/sound/buki.mp3');  // 武器の効果音
         
         console.log('サウンドファイルのロードを開始しました');
     }
@@ -89,6 +127,19 @@ class GameScene extends Phaser.Scene {
                 console.error('BGMの再生に失敗しました:', error);
             }
         }
+        
+        // 武器効果音の初期化
+        if (this.hasSoundSystem) {
+            try {
+                this.weaponSound = this.sound.add('buki', { volume: 0.5 });
+                console.log('武器効果音を初期化しました');
+            } catch (error) {
+                console.error('武器効果音の初期化に失敗しました:', error);
+            }
+        }
+        
+        // 武器のグループを作成
+        this.weapons = this.physics.add.group();
         
         // カメラの設定（ファミコンサイズに合わせる）
         this.cameras.main.setBounds(0, 0, 1200, 240);
@@ -146,6 +197,24 @@ class GameScene extends Phaser.Scene {
         
         // ゲームキャンバスの下にHTMLボタンを追加
         this.createHTMLSoundButton();
+        
+        // モバイルデバイスの判定
+        this.checkMobileDevice();
+        
+        // バーチャルボタンの作成（モバイルの場合のみ）
+        if (this.isMobile) {
+            // Phaser内のバーチャルボタンは使用しない（HTMLバーチャルボタンを使用）
+            // this.createVirtualButtons();
+            
+            // 画面の向きが変わったときのイベントリスナーを追加
+            window.addEventListener('resize', () => {
+                this.checkOrientation();
+                // this.updateVirtualButtonsPosition();
+            });
+            
+            // 初期の画面の向きをチェック
+            this.checkOrientation();
+        }
     }
     
     // HTMLボタンを作成（ゲームキャンバスの外側に配置）
@@ -219,7 +288,205 @@ class GameScene extends Phaser.Scene {
         window.addEventListener('resize', () => {
             soundButton.style.top = `${gameCanvas.offsetTop + gameCanvas.offsetHeight + 10}px`;
             console.log(`ボタン位置を更新: top=${gameCanvas.offsetTop + gameCanvas.offsetHeight + 10}px`);
+            
+            // バーチャルボタンの位置も更新
+            if (this.isMobile && this.htmlVirtualButtons) {
+                this.updateHTMLVirtualButtonsPosition();
+            }
         });
+        
+        // モバイルの場合はHTMLバーチャルボタンも作成
+        if (this.isMobile) {
+            this.createHTMLVirtualButtons();
+        }
+    }
+
+    // HTMLバーチャルボタンを作成するメソッド（ゲームキャンバスの外側に配置）
+    createHTMLVirtualButtons() {
+        // ゲームのキャンバス要素を取得
+        const gameCanvas = this.sys.game.canvas;
+        
+        // HTMLバーチャルボタンのコンテナを作成
+        this.htmlVirtualButtons = {
+            left: null,
+            right: null,
+            up: null,
+            down: null,
+            attack: null,
+            jump: null
+        };
+        
+        // ボタンのスタイル設定を強化
+        const buttonStyle = {
+            width: '120px', // 2倍サイズに拡大
+            height: '120px', // 2倍サイズに拡大
+            borderRadius: '50%',
+            fontSize: '36px', // フォントサイズも大きく
+            fontWeight: 'bold',
+            color: '#FFFFFF',
+            border: '4px solid #FFFFFF', // ボーダーも太く
+            cursor: 'pointer',
+            position: 'fixed',
+            zIndex: '10000',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            userSelect: 'none',
+            touchAction: 'manipulation',
+            boxShadow: '0 0 15px rgba(255, 255, 255, 0.7)'  // より目立つエフェクト
+        };
+        
+        // 方向ボタンの作成関数
+        const createDirectionButton = (text, color, key) => {
+            const button = document.createElement('div');
+            button.innerHTML = text;
+            button.style.backgroundColor = color;
+            
+            // スタイルを適用
+            Object.keys(buttonStyle).forEach(prop => {
+                button.style[prop] = buttonStyle[prop];
+            });
+            
+            // タッチイベントを追加
+            button.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                this[`virtual${key}Down`] = true;
+                button.style.backgroundColor = this.lightenColor(color, 20);
+                button.style.transform = 'scale(1.1)';
+            });
+            
+            button.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                this[`virtual${key}Down`] = false;
+                button.style.backgroundColor = color;
+                button.style.transform = 'scale(1)';
+            });
+            
+            button.addEventListener('touchcancel', (e) => {
+                e.preventDefault();
+                this[`virtual${key}Down`] = false;
+                button.style.backgroundColor = color;
+                button.style.transform = 'scale(1)';
+            });
+            
+            // マウスイベントも追加（デスクトップでのテスト用）
+            button.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                this[`virtual${key}Down`] = true;
+                button.style.backgroundColor = this.lightenColor(color, 20);
+                button.style.transform = 'scale(1.1)';
+            });
+            
+            button.addEventListener('mouseup', (e) => {
+                e.preventDefault();
+                this[`virtual${key}Down`] = false;
+                button.style.backgroundColor = color;
+                button.style.transform = 'scale(1)';
+            });
+            
+            button.addEventListener('mouseleave', (e) => {
+                e.preventDefault();
+                this[`virtual${key}Down`] = false;
+                button.style.backgroundColor = color;
+                button.style.transform = 'scale(1)';
+            });
+            
+            // ゲームキャンバスの親要素にボタンを追加
+            gameCanvas.parentNode.appendChild(button);
+            
+            return button;
+        };
+        
+        // 各ボタンを作成
+        this.htmlVirtualButtons.left = createDirectionButton('←', '#3333FF', 'Left');
+        this.htmlVirtualButtons.right = createDirectionButton('→', '#3333FF', 'Right');
+        this.htmlVirtualButtons.up = createDirectionButton('↑', '#3333FF', 'Up');
+        this.htmlVirtualButtons.down = createDirectionButton('↓', '#3333FF', 'Down');
+        this.htmlVirtualButtons.attack = createDirectionButton('A', '#FF3333', 'Attack');
+        this.htmlVirtualButtons.jump = createDirectionButton('B', '#33CC33', 'Jump');
+        
+        // ボタンの位置を更新
+        this.updateHTMLVirtualButtonsPosition();
+        
+        console.log('HTMLバーチャルボタンを作成しました');
+    }
+    
+    // HTMLバーチャルボタンの位置を更新するメソッド
+    updateHTMLVirtualButtonsPosition() {
+        if (!this.htmlVirtualButtons) {
+            console.error('htmlVirtualButtonsが初期化されていません');
+            return;
+        }
+        
+        if (!this.htmlSoundButton) {
+            console.error('htmlSoundButtonが初期化されていません');
+            return;
+        }
+        
+        const gameCanvas = this.sys.game.canvas;
+        const canvasRect = gameCanvas.getBoundingClientRect();
+        const soundButtonRect = this.htmlSoundButton.getBoundingClientRect();
+        const buttonSize = 120; // 2倍サイズに合わせて変更
+        const buttonPadding = 20; // パディングも少し大きく
+        
+        console.log('キャンバス位置:', canvasRect);
+        console.log('サウンドボタン位置:', soundButtonRect);
+        
+        // 画面下部に固定配置
+        const bottom = window.innerHeight - buttonSize - buttonPadding;
+        
+        // 左側のコントロール
+        // 左ボタン
+        this.htmlVirtualButtons.left.style.bottom = `${buttonPadding + buttonSize}px`;
+        this.htmlVirtualButtons.left.style.left = `${buttonPadding}px`;
+        
+        // 右ボタン
+        this.htmlVirtualButtons.right.style.bottom = `${buttonPadding + buttonSize}px`;
+        this.htmlVirtualButtons.right.style.left = `${2 * buttonSize + buttonPadding}px`;
+        
+        // 上ボタン
+        this.htmlVirtualButtons.up.style.bottom = `${2 * buttonSize + 2 * buttonPadding}px`;
+        this.htmlVirtualButtons.up.style.left = `${buttonSize + buttonPadding}px`;
+        
+        // 下ボタン - 左右の間ではなく、一段下に配置
+        this.htmlVirtualButtons.down.style.bottom = `${buttonPadding}px`;
+        this.htmlVirtualButtons.down.style.left = `${buttonSize + buttonPadding}px`;
+        
+        // 右側のボタン - AとBボタンの間隔を広げる
+        // 攻撃ボタン（A）
+        this.htmlVirtualButtons.attack.style.bottom = `${buttonPadding + buttonSize}px`;
+        this.htmlVirtualButtons.attack.style.right = `${2 * buttonSize + buttonPadding}px`;
+        
+        // ジャンプボタン（B）
+        this.htmlVirtualButtons.jump.style.bottom = `${buttonPadding + buttonSize}px`;
+        this.htmlVirtualButtons.jump.style.right = `${buttonPadding}px`;
+        
+        // すべてのボタンを表示状態に
+        Object.values(this.htmlVirtualButtons).forEach(button => {
+            if (button) {
+                button.style.display = 'flex';
+                console.log(`ボタン表示状態: ${button.innerHTML}, 位置: left=${button.style.left}, bottom=${button.style.bottom}`);
+            }
+        });
+        
+        console.log('HTMLバーチャルボタンの位置を更新しました');
+    }
+    
+    // 色を明るくする関数（ホバーエフェクト用）
+    lightenColor(color, percent) {
+        // カラーコードを16進数から10進数のRGB値に変換
+        const num = parseInt(color.replace('#', ''), 16);
+        const r = (num >> 16) + percent;
+        const g = ((num >> 8) & 0x00FF) + percent;
+        const b = (num & 0x0000FF) + percent;
+        
+        // 各色が255を超えないようにする
+        const newR = r > 255 ? 255 : r;
+        const newG = g > 255 ? 255 : g;
+        const newB = b > 255 ? 255 : b;
+        
+        // 10進数のRGB値を16進数のカラーコードに戻す
+        return `#${((newR << 16) | (newG << 8) | newB).toString(16).padStart(6, '0')}`;
     }
 
     // コライダーデータ
@@ -311,11 +578,15 @@ class GameScene extends Phaser.Scene {
         // ハシゴ上では重力を無効化
         player.body.setAllowGravity(false);
         
+        // バーチャルボタンの状態を考慮
+        const upPressed = this.cursors.up.isDown || this.virtualUpDown;
+        const downPressed = this.cursors.down.isDown || this.virtualDownDown;
+        
         // ハシゴ上での移動処理
-        if (this.cursors.up.isDown) {
+        if (upPressed) {
             player.setVelocityY(-100);
             player.anims.play('climb', true);
-        } else if (this.cursors.down.isDown) {
+        } else if (downPressed) {
             player.setVelocityY(100);
             player.anims.play('climb', true);
         } else {
@@ -686,25 +957,42 @@ class GameScene extends Phaser.Scene {
         
         // プレイヤーの移動処理（ハシゴ上でなければ通常の移動）
         if (!this.isOnLadder) {
-            if (this.cursors.left.isDown) {
+            // バーチャルボタンの状態を考慮
+            const leftPressed = this.cursors.left.isDown || this.virtualLeftDown;
+            const rightPressed = this.cursors.right.isDown || this.virtualRightDown;
+            const upPressed = this.cursors.up.isDown || this.virtualUpDown;
+            const downPressed = this.cursors.down.isDown || this.virtualDownDown;
+            const attackPressed = this.input.keyboard.addKey('Z').isDown || this.virtualAttackDown;
+            const jumpPressed = this.cursors.space.isDown || this.virtualJumpDown;
+            
+            // 攻撃処理
+            if (attackPressed && time - this.lastAttackTime > this.attackCooldown) {
+                // 右向きまたは左向きのアイドル時や走行時に攻撃可能に修正
+                if ((this.playerState === 'idle' || this.playerState === 'running')) {
+                    this.throwWeapon();
+                    this.lastAttackTime = time;
+                }
+            }
+            
+            if (leftPressed) {
                 // 左に移動
                 this.player.setVelocityX(-160);
                 this.playerDirection = 'left';
                 
                 if (visualGrounded) {
-                    if (this.cursors.down.isDown) {
+                    if (downPressed) {
                         newState = 'crouching';
                     } else {
                         newState = 'running';
                     }
                 }
-            } else if (this.cursors.right.isDown) {
+            } else if (rightPressed) {
                 // 右に移動
                 this.player.setVelocityX(160);
                 this.playerDirection = 'right';
                 
                 if (visualGrounded) {
-                    if (this.cursors.down.isDown) {
+                    if (downPressed) {
                         newState = 'crouching';
                     } else {
                         newState = 'running';
@@ -715,7 +1003,7 @@ class GameScene extends Phaser.Scene {
                 this.player.setVelocityX(0);
                 
                 if (visualGrounded) {
-                    if (this.cursors.down.isDown) {
+                    if (downPressed) {
                         newState = 'crouching';
                     } else {
                         newState = 'idle';
@@ -724,7 +1012,7 @@ class GameScene extends Phaser.Scene {
             }
             
             // しゃがみ処理
-            if (this.cursors.down.isDown && visualGrounded) {
+            if (downPressed && visualGrounded) {
                 this.isCrouching = true;
                 newState = 'crouching';
             } else {
@@ -735,7 +1023,7 @@ class GameScene extends Phaser.Scene {
             const canJump = isGrounded && !this.isCrouching && 
                             time - this.lastJumpTime > this.jumpBufferTime;
             
-            if (this.cursors.up.isDown && canJump) {
+            if ((jumpPressed || upPressed) && canJump) {
                 // プレイヤーの高さは元の画像の高さ×スケール(0.25)
                 // 適切なジャンプ力を計算（重力と高さから算出）
                 const jumpHeight = this.player.height * 4 / 9; // ジャンプ高さを2倍に増加
@@ -818,9 +1106,14 @@ class GameScene extends Phaser.Scene {
             }
         }
         
-        // デバッグ：状態をコンソールに出力（フレームレートを下げるため100msごと）
+        // デバッグ情報を表示
         if (Math.floor(time / 100) !== Math.floor((time - delta) / 100)) {
-            // console.log(`位置: (${this.player.x.toFixed(1)}, ${this.player.y.toFixed(1)}), 速度: (${this.player.body.velocity.x.toFixed(1)}, ${this.player.body.velocity.y.toFixed(1)}), 接地: ${isGrounded}`);
+            console.log(`位置: (${this.player.x.toFixed(1)}, ${this.player.y.toFixed(1)}), 速度: (${this.player.body.velocity.x.toFixed(1)}, ${this.player.body.velocity.y.toFixed(1)}), 接地: ${isGrounded}`);
+            
+            // バーチャルボタンの状態をデバッグ表示
+            if (this.isMobile) {
+                console.log(`バーチャルボタン状態: 左=${this.virtualLeftDown}, 右=${this.virtualRightDown}, 上=${this.virtualUpDown}, 下=${this.virtualDownDown}, 攻撃=${this.virtualAttackDown}, ジャンプ=${this.virtualJumpDown}`);
+            }
         }
     }
     
@@ -964,6 +1257,332 @@ class GameScene extends Phaser.Scene {
                 console.log('サウンドがオフのためジャンプ音を再生しません');
             }
         }
+    }
+
+    // 武器を投げるメソッド
+    throwWeapon() {
+        console.log('武器を投げました！ 向き:', this.playerDirection);
+        
+        // プレイヤーの向きに応じてオフセットと速度を調整
+        let offsetX = 20;  // デフォルトは右向き
+        let weaponTexture = 'negi_right';
+        let velocityX = this.weaponSpeed;
+        
+        // 左向きの場合は反対側に
+        if (this.playerDirection === 'left') {
+            offsetX = -20;  // 左側にオフセット
+            weaponTexture = 'negi_left';  // 左向きテクスチャ
+            velocityX = -this.weaponSpeed;  // 左方向に速度を設定
+        }
+        
+        const offsetY = -10;  // 少し上にオフセット
+        
+        // 武器を作成
+        const weapon = this.weapons.create(
+            this.player.x + offsetX,
+            this.player.y + offsetY,
+            weaponTexture
+        );
+        
+        // 武器のサイズを設定
+        weapon.setScale(0.25);
+        
+        // 左向きの場合はスプライトを水平方向に反転
+        if (this.playerDirection === 'left') {
+            weapon.setFlipX(true);
+        }
+        
+        // 武器の物理特性を設定
+        weapon.setVelocityX(velocityX);  // 向きに応じた速度を設定
+        weapon.setGravityY(-this.physics.world.gravity.y);  // 重力を無効化
+        
+        // 武器が画面外に出たら削除
+        weapon.checkWorldBounds = true;
+        weapon.outOfBoundsKill = true;
+        
+        // 武器の寿命を設定（5秒後に自動削除）
+        this.time.delayedCall(5000, () => {
+            if (weapon.active) {
+                weapon.destroy();
+            }
+        });
+        
+        // 武器の効果音を再生
+        this.playWeaponSound();
+    }
+    
+    // 武器の効果音を再生するメソッド
+    playWeaponSound() {
+        if (this.hasSoundSystem && this.weaponSound && this.isSoundOn) {
+            try {
+                // 既に再生中の場合は停止してから再生
+                if (this.weaponSound.isPlaying) {
+                    this.weaponSound.stop();
+                }
+                
+                this.weaponSound.play();
+                console.log('武器効果音を再生しました');
+            } catch (error) {
+                console.error('武器効果音の再生に失敗しました:', error);
+                
+                // エラーが発生した場合、サウンドを再作成してみる
+                try {
+                    this.weaponSound = this.sound.add('buki', { volume: 0.5 });
+                    this.weaponSound.play();
+                    console.log('武器効果音を再作成して再生しました');
+                } catch (retryError) {
+                    console.error('武器効果音の再作成と再生に失敗しました:', retryError);
+                }
+            }
+        } else {
+            if (!this.hasSoundSystem) {
+                console.warn('サウンドシステムが利用できないため武器効果音を再生できません');
+            } else if (!this.weaponSound) {
+                console.warn('武器効果音が初期化されていないため再生できません');
+            } else if (!this.isSoundOn) {
+                console.log('サウンドがオフのため武器効果音を再生しません');
+            }
+        }
+    }
+
+    // モバイルデバイスかどうかを判定するメソッド
+    checkMobileDevice() {
+        // デバッグ用に強制的にモバイル判定をtrueにする
+        this.isMobile = true;
+        console.log(`モバイルデバイス判定: ${this.isMobile} (デバッグモード)`);
+        
+        // createHTMLVirtualButtons関数が存在するか確認
+        if (typeof this.createHTMLVirtualButtons === 'function') {
+            console.log('createHTMLVirtualButtons関数は正常に定義されています');
+        } else {
+            console.error('createHTMLVirtualButtons関数が見つかりません');
+        }
+        
+        // 遅延してボタン作成を呼び出し（DOMが完全に読み込まれた後）
+        setTimeout(() => {
+            if (this.isMobile && !this.htmlVirtualButtons) {
+                console.log('遅延実行: HTMLバーチャルボタンを作成します');
+                this.createHTMLVirtualButtons();
+            }
+        }, 1000);
+    }
+    
+    // 画面の向きを判定するメソッド
+    checkOrientation() {
+        this.isLandscape = window.innerWidth > window.innerHeight;
+        console.log(`画面の向き: ${this.isLandscape ? '横向き' : '縦向き'}`);
+    }
+    
+    // バーチャルボタンを作成するメソッド
+    createVirtualButtons() {
+        const buttonSize = 64;
+        const buttonAlpha = 0.9;
+        const buttonPadding = 20;
+        
+        // ボタンの背景を作成する関数
+        const createButtonBackground = (x, y, color) => {
+            const bg = this.add.graphics();
+            bg.fillStyle(color, 1);
+            bg.lineStyle(3, 0xFFFFFF, 1);
+            bg.fillCircle(x, y, buttonSize / 2);
+            bg.strokeCircle(x, y, buttonSize / 2);
+            bg.setScrollFactor(0);
+            bg.setInteractive(new Phaser.Geom.Circle(x, y, buttonSize / 2), Phaser.Geom.Circle.Contains);
+            return bg;
+        };
+        
+        // ボタンのテキストを作成する関数
+        const createButtonText = (x, y, text) => {
+            return this.add.text(x, y, text, {
+                fontSize: '32px',
+                fontFamily: 'Arial, sans-serif',
+                fontStyle: 'bold',
+                fill: '#FFFFFF'
+            })
+            .setOrigin(0.5)
+            .setScrollFactor(0);
+        };
+        
+        // 左ボタン
+        const leftBg = createButtonBackground(0, 0, 0x3333FF);
+        const leftText = createButtonText(0, 0, '←');
+        this.virtualButtons.left = { bg: leftBg, text: leftText };
+        
+        // 右ボタン
+        const rightBg = createButtonBackground(0, 0, 0x3333FF);
+        const rightText = createButtonText(0, 0, '→');
+        this.virtualButtons.right = { bg: rightBg, text: rightText };
+        
+        // 上ボタン
+        const upBg = createButtonBackground(0, 0, 0x3333FF);
+        const upText = createButtonText(0, 0, '↑');
+        this.virtualButtons.up = { bg: upBg, text: upText };
+        
+        // 下ボタン
+        const downBg = createButtonBackground(0, 0, 0x3333FF);
+        const downText = createButtonText(0, 0, '↓');
+        this.virtualButtons.down = { bg: downBg, text: downText };
+        
+        // 攻撃ボタン
+        const attackBg = createButtonBackground(0, 0, 0xFF3333);
+        const attackText = createButtonText(0, 0, 'A');
+        this.virtualButtons.attack = { bg: attackBg, text: attackText };
+        
+        // ジャンプボタン
+        const jumpBg = createButtonBackground(0, 0, 0x33CC33);
+        const jumpText = createButtonText(0, 0, 'B');
+        this.virtualButtons.jump = { bg: jumpBg, text: jumpText };
+        this.virtualJumpDown = false;
+        
+        // ボタンのイベント設定
+        this.setupVirtualButtonEvents();
+        
+        // ボタンの位置を更新
+        this.updateVirtualButtonsPosition();
+    }
+    
+    // バーチャルボタンの位置を更新するメソッド
+    updateVirtualButtonsPosition() {
+        const buttonSize = 64;
+        const buttonPadding = 20;
+        const gameWidth = this.game.config.width;
+        const gameHeight = this.game.config.height;
+        
+        // ボタンの位置を設定する関数
+        const setButtonPosition = (button, x, y) => {
+            if (button && button.bg) {
+                button.bg.x = x;
+                button.bg.y = y;
+                button.text.x = x;
+                button.text.y = y;
+            }
+        };
+        
+        if (this.isLandscape) {
+            // 横向きの場合、左右に配置
+            // 左側のボタン
+            setButtonPosition(this.virtualButtons.left, buttonSize + buttonPadding, gameHeight - buttonSize - buttonPadding);
+            setButtonPosition(this.virtualButtons.right, 2 * buttonSize + buttonPadding, gameHeight - buttonSize - buttonPadding);
+            setButtonPosition(this.virtualButtons.down, buttonSize + buttonPadding, gameHeight - buttonPadding);
+            setButtonPosition(this.virtualButtons.up, buttonSize + buttonPadding, gameHeight - 2 * buttonSize - buttonPadding);
+            
+            // 右側のボタン
+            setButtonPosition(this.virtualButtons.attack, gameWidth - buttonSize - buttonPadding, gameHeight - buttonSize - buttonPadding);
+            setButtonPosition(this.virtualButtons.jump, gameWidth - 2 * buttonSize - buttonPadding, gameHeight - buttonSize - buttonPadding);
+        } else {
+            // 縦向きの場合、下部に配置
+            setButtonPosition(this.virtualButtons.left, buttonSize + buttonPadding, gameHeight - buttonSize - buttonPadding);
+            setButtonPosition(this.virtualButtons.down, 2 * buttonSize + buttonPadding, gameHeight - buttonSize - buttonPadding);
+            setButtonPosition(this.virtualButtons.right, 3 * buttonSize + buttonPadding, gameHeight - buttonSize - buttonPadding);
+            setButtonPosition(this.virtualButtons.up, 4 * buttonSize + buttonPadding, gameHeight - buttonSize - buttonPadding);
+            setButtonPosition(this.virtualButtons.attack, gameWidth - buttonSize - buttonPadding, gameHeight - buttonSize - buttonPadding);
+            setButtonPosition(this.virtualButtons.jump, gameWidth - 2 * buttonSize - buttonPadding, gameHeight - buttonSize - buttonPadding);
+        }
+    }
+    
+    // バーチャルボタンのイベントを設定するメソッド
+    setupVirtualButtonEvents() {
+        // 左ボタン
+        this.virtualButtons.left.bg.on('pointerdown', () => {
+            this.virtualLeftDown = true;
+            this.virtualButtons.left.bg.fillStyle(0x6666FF, 1);
+            this.virtualButtons.left.bg.fillCircle(this.virtualButtons.left.bg.x, this.virtualButtons.left.bg.y, 32);
+        });
+        this.virtualButtons.left.bg.on('pointerup', () => {
+            this.virtualLeftDown = false;
+            this.virtualButtons.left.bg.fillStyle(0x3333FF, 1);
+            this.virtualButtons.left.bg.fillCircle(this.virtualButtons.left.bg.x, this.virtualButtons.left.bg.y, 32);
+        });
+        this.virtualButtons.left.bg.on('pointerout', () => {
+            this.virtualLeftDown = false;
+            this.virtualButtons.left.bg.fillStyle(0x3333FF, 1);
+            this.virtualButtons.left.bg.fillCircle(this.virtualButtons.left.bg.x, this.virtualButtons.left.bg.y, 32);
+        });
+        
+        // 右ボタン
+        this.virtualButtons.right.bg.on('pointerdown', () => {
+            this.virtualRightDown = true;
+            this.virtualButtons.right.bg.fillStyle(0x6666FF, 1);
+            this.virtualButtons.right.bg.fillCircle(this.virtualButtons.right.bg.x, this.virtualButtons.right.bg.y, 32);
+        });
+        this.virtualButtons.right.bg.on('pointerup', () => {
+            this.virtualRightDown = false;
+            this.virtualButtons.right.bg.fillStyle(0x3333FF, 1);
+            this.virtualButtons.right.bg.fillCircle(this.virtualButtons.right.bg.x, this.virtualButtons.right.bg.y, 32);
+        });
+        this.virtualButtons.right.bg.on('pointerout', () => {
+            this.virtualRightDown = false;
+            this.virtualButtons.right.bg.fillStyle(0x3333FF, 1);
+            this.virtualButtons.right.bg.fillCircle(this.virtualButtons.right.bg.x, this.virtualButtons.right.bg.y, 32);
+        });
+        
+        // 上ボタン
+        this.virtualButtons.up.bg.on('pointerdown', () => {
+            this.virtualUpDown = true;
+            this.virtualButtons.up.bg.fillStyle(0x6666FF, 1);
+            this.virtualButtons.up.bg.fillCircle(this.virtualButtons.up.bg.x, this.virtualButtons.up.bg.y, 32);
+        });
+        this.virtualButtons.up.bg.on('pointerup', () => {
+            this.virtualUpDown = false;
+            this.virtualButtons.up.bg.fillStyle(0x3333FF, 1);
+            this.virtualButtons.up.bg.fillCircle(this.virtualButtons.up.bg.x, this.virtualButtons.up.bg.y, 32);
+        });
+        this.virtualButtons.up.bg.on('pointerout', () => {
+            this.virtualUpDown = false;
+            this.virtualButtons.up.bg.fillStyle(0x3333FF, 1);
+            this.virtualButtons.up.bg.fillCircle(this.virtualButtons.up.bg.x, this.virtualButtons.up.bg.y, 32);
+        });
+        
+        // 下ボタン
+        this.virtualButtons.down.bg.on('pointerdown', () => {
+            this.virtualDownDown = true;
+            this.virtualButtons.down.bg.fillStyle(0x6666FF, 1);
+            this.virtualButtons.down.bg.fillCircle(this.virtualButtons.down.bg.x, this.virtualButtons.down.bg.y, 32);
+        });
+        this.virtualButtons.down.bg.on('pointerup', () => {
+            this.virtualDownDown = false;
+            this.virtualButtons.down.bg.fillStyle(0x3333FF, 1);
+            this.virtualButtons.down.bg.fillCircle(this.virtualButtons.down.bg.x, this.virtualButtons.down.bg.y, 32);
+        });
+        this.virtualButtons.down.bg.on('pointerout', () => {
+            this.virtualDownDown = false;
+            this.virtualButtons.down.bg.fillStyle(0x3333FF, 1);
+            this.virtualButtons.down.bg.fillCircle(this.virtualButtons.down.bg.x, this.virtualButtons.down.bg.y, 32);
+        });
+        
+        // 攻撃ボタン
+        this.virtualButtons.attack.bg.on('pointerdown', () => {
+            this.virtualAttackDown = true;
+            this.virtualButtons.attack.bg.fillStyle(0xFF6666, 1);
+            this.virtualButtons.attack.bg.fillCircle(this.virtualButtons.attack.bg.x, this.virtualButtons.attack.bg.y, 32);
+        });
+        this.virtualButtons.attack.bg.on('pointerup', () => {
+            this.virtualAttackDown = false;
+            this.virtualButtons.attack.bg.fillStyle(0xFF3333, 1);
+            this.virtualButtons.attack.bg.fillCircle(this.virtualButtons.attack.bg.x, this.virtualButtons.attack.bg.y, 32);
+        });
+        this.virtualButtons.attack.bg.on('pointerout', () => {
+            this.virtualAttackDown = false;
+            this.virtualButtons.attack.bg.fillStyle(0xFF3333, 1);
+            this.virtualButtons.attack.bg.fillCircle(this.virtualButtons.attack.bg.x, this.virtualButtons.attack.bg.y, 32);
+        });
+        
+        // ジャンプボタン
+        this.virtualButtons.jump.bg.on('pointerdown', () => {
+            this.virtualJumpDown = true;
+            this.virtualButtons.jump.bg.fillStyle(0x66FF66, 1);
+            this.virtualButtons.jump.bg.fillCircle(this.virtualButtons.jump.bg.x, this.virtualButtons.jump.bg.y, 32);
+        });
+        this.virtualButtons.jump.bg.on('pointerup', () => {
+            this.virtualJumpDown = false;
+            this.virtualButtons.jump.bg.fillStyle(0x33CC33, 1);
+            this.virtualButtons.jump.bg.fillCircle(this.virtualButtons.jump.bg.x, this.virtualButtons.jump.bg.y, 32);
+        });
+        this.virtualButtons.jump.bg.on('pointerout', () => {
+            this.virtualJumpDown = false;
+            this.virtualButtons.jump.bg.fillStyle(0x33CC33, 1);
+            this.virtualButtons.jump.bg.fillCircle(this.virtualButtons.jump.bg.x, this.virtualButtons.jump.bg.y, 32);
+        });
     }
 }
 
